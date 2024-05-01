@@ -1,17 +1,22 @@
 package main
 
 import (
+	"context"
+	"fmt"
+
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
 
 type editor struct {
-	width  int
-	height int
-	inputs []buffer
-	focus  int
-	mode   editorMode
+	width   int
+	height  int
+	buffers []buffer
+	focus   int
+	mode    editorMode
+
+	normalModeCommands []command
 }
 
 type editorMode string
@@ -23,13 +28,16 @@ const (
 
 func newEditor() *editor {
 	m := editor{
-		inputs: make([]buffer, initialInputs),
-		mode:   modeNormal,
+		buffers: make([]buffer, initialInputs),
+		mode:    modeNormal,
+		normalModeCommands: []command{
+			cmdQuit{},
+		},
 	}
 	for i := 0; i < initialInputs; i++ {
-		m.inputs[i] = newBuffer()
+		m.buffers[i] = newBuffer()
 	}
-	m.inputs[m.focus].Focus()
+	m.buffers[m.focus].Focus()
 	return &m
 }
 
@@ -40,27 +48,32 @@ func (m editor) Init() tea.Cmd {
 func (m editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	updateInputs := true
+	updateBuffers := true
 
 	switch m.mode {
 	case modeNormal:
 		var cmd tea.Cmd
-		updateInputs, m, cmd = m.updateNormalMode(msg)
+		updateBuffers, m, cmd = m.updateNormalMode(msg)
 		cmds = append(cmds, cmd)
 
 	case modeInsert:
 		var cmd tea.Cmd
-		updateInputs, m, cmd = m.updateInsertMode(msg)
+		updateBuffers, m, cmd = m.updateInsertMode(msg)
 		cmds = append(cmds, cmd)
 	}
 
-	m.sizeInputs()
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.height = msg.Height
+		m.width = msg.Width
+	}
 
-	if updateInputs {
-		// Update all textareas
-		for i := range m.inputs {
-			newModel, cmd := m.inputs[i].Update(msg)
-			m.inputs[i] = newModel
+	m.sizeBuffers()
+
+	if updateBuffers {
+		for i := range m.buffers {
+			newModel, cmd := m.buffers[i].Update(msg)
+			m.buffers[i] = newModel
 			cmds = append(cmds, cmd)
 		}
 	}
@@ -68,10 +81,10 @@ func (m editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-func (m *editor) sizeInputs() {
-	for i := range m.inputs {
-		m.inputs[i].SetWidth(m.width / len(m.inputs))
-		m.inputs[i].SetHeight(m.height - helpHeight)
+func (m *editor) sizeBuffers() {
+	for i := range m.buffers {
+		m.buffers[i].SetWidth(m.width / len(m.buffers))
+		m.buffers[i].SetHeight(m.height - helpHeight)
 	}
 }
 
@@ -82,22 +95,36 @@ func (m editor) updateNormalMode(msg tea.Msg) (bool, editor, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		for _, cmd := range m.normalModeCommands {
+			if msg.String() == cmd.Short() {
+				c, err := cmd.Exec(context.Background())
+				if err != nil {
+					fmt.Print(err)
+				}
+
+				return false, m, c
+			}
+		}
+
 		switch msg.String() {
 		case "k":
-			m.inputs[0].CursorUp()
+			m.buffers[0].CursorUp()
+			updateInputs = false
+		case "h":
+			m.buffers[0].CharacterLeft()
+			updateInputs = false
+		case "l":
+			m.buffers[0].CharacterRight()
+			updateInputs = false
 		case "j":
-			m.inputs[0].CursorDown()
-		case "q":
-			return updateInputs, m, tea.Quit
+			m.buffers[0].CursorDown()
+			updateInputs = false
 		case "i":
 			m.mode = modeInsert
 			updateInputs = false
 		default:
 			updateInputs = false
 		}
-	case tea.WindowSizeMsg:
-		m.height = msg.Height
-		m.width = msg.Width
 	}
 
 	return updateInputs, m, tea.Batch(cmds...)
@@ -114,9 +141,6 @@ func (m editor) updateInsertMode(msg tea.Msg) (bool, editor, tea.Cmd) {
 			m.mode = modeNormal
 			updateInputs = false
 		}
-	case tea.WindowSizeMsg:
-		m.height = msg.Height
-		m.width = msg.Width
 	}
 
 	return updateInputs, m, tea.Batch(cmds...)
@@ -124,8 +148,8 @@ func (m editor) updateInsertMode(msg tea.Msg) (bool, editor, tea.Cmd) {
 
 func (m editor) View() string {
 	var views []string
-	for i := range m.inputs {
-		views = append(views, m.inputs[i].View())
+	for i := range m.buffers {
+		views = append(views, m.buffers[i].View())
 	}
 
 	return lipgloss.JoinHorizontal(lipgloss.Top, views...) + "\n\n" + string(m.mode)

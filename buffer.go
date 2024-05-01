@@ -5,30 +5,32 @@ import (
 	"io"
 	"os"
 
-	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/bkielbasa/tide/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	sitter "github.com/smacker/go-tree-sitter"
+	"github.com/smacker/go-tree-sitter/golang"
 )
 
 type buffer struct {
 	name string
 	text textarea.Model
+
+	parser *sitter.Parser
 }
 
 func newBuffer() buffer {
 	t := textarea.New()
-	t.KeyMap.DeleteWordBackward.SetEnabled(false)
+	t.CharLimit = 0
 	t.ShowLineNumbers = true
-	t.KeyMap.LineNext = key.NewBinding(key.WithKeys("down"))
-	t.KeyMap.LinePrevious = key.NewBinding(key.WithKeys("up"))
 
 	cursorStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212"))
 	t.Cursor.Style = cursorStyle
 
 	b := buffer{
-		text: t,
-		name: "UNNAMED",
+		text:   t,
+		name:   "UNNAMED",
+		parser: sitter.NewParser(),
 	}
 
 	b.Open("main.go")
@@ -48,6 +50,9 @@ func (b *buffer) Open(filename string) error {
 	}
 
 	b.text.SetValue(string(cont))
+	b.text.MoveToBegin()
+
+	b.parser.SetLanguage(golang.GetLanguage())
 
 	return nil
 }
@@ -56,13 +61,16 @@ func (b *buffer) CursorUp() {
 	b.text.CursorUp()
 }
 
-func (b *buffer) CursorDown() {
-	b.text.CursorDown()
+func (b *buffer) CharacterLeft() {
+	b.text.CharacterLeft(false)
 }
 
-func (b *buffer) SetSize(width, height int) {
-	b.text.SetWidth(width)
-	b.text.SetHeight(height)
+func (b *buffer) CharacterRight() {
+	b.text.CharacterRight()
+}
+
+func (b *buffer) CursorDown() {
+	b.text.CursorDown()
 }
 
 func (b *buffer) Focus() tea.Cmd {
@@ -84,12 +92,10 @@ func (b buffer) View() string {
 	return b.text.View()
 }
 
-func (b buffer) SetWidth(width int) buffer {
+func (b *buffer) SetWidth(width int) {
 	b.text.SetWidth(width)
-	return b
 }
 
-func (b buffer) SetHeight(height int) buffer {
+func (b *buffer) SetHeight(height int) {
 	b.text.SetHeight(height)
-	return b
 }
