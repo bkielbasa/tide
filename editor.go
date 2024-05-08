@@ -7,7 +7,7 @@ import (
 	"github.com/bkielbasa/tide/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"log/slog"
+	"strings"
 )
 
 type editor struct {
@@ -77,7 +77,6 @@ func (m editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	if updateInput {
 		newModel, cmd := m.commandInput.Update(msg)
-		slog.Info("updating command input", "model", slog.Any("msg", msg))
 		m.commandInput = newModel
 		cmds = append(cmds, cmd)
 	}
@@ -124,10 +123,12 @@ func (m editor) updateNormalMode(msg tea.Msg) (bool, bool, editor, tea.Cmd) {
 					break
 				}
 
+				val := strings.Split(currValue, " ")
+
 				// TODO: add proper command parsing
 				for _, cmd := range m.normalModeCommands {
-					if currValue == cmd.Short() || currValue == cmd.FullName() {
-						c, err := cmd.Exec(context.Background())
+					if val[0] == cmd.Short() || val[0] == cmd.FullName() {
+						c, err := cmd.Exec(context.Background(), val[1:]...)
 						if err != nil {
 							fmt.Print(err)
 						}

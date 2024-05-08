@@ -8,7 +8,7 @@ import (
 type command interface {
 	FullName() string
 	Short() string
-	Exec(ctx context.Context) (tea.Cmd, error)
+	Exec(ctx context.Context, args ...string) (tea.Cmd, error)
 }
 
 type cmdQuit struct {
@@ -22,6 +22,6 @@ func (cmdQuit) Short() string {
 	return "q"
 }
 
-func (cmdQuit) Exec(ctx context.Context) (tea.Cmd, error) {
+func (cmdQuit) Exec(ctx context.Context, args ...string) (tea.Cmd, error) {
 	return tea.Quit, nil
 }
