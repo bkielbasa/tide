@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-
-	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/bkielbasa/tide/cmdinput"
+	"github.com/bkielbasa/tide/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"log/slog"
 )
 
 type editor struct {
@@ -17,6 +18,8 @@ type editor struct {
 	mode    editorMode
 
 	normalModeCommands []command
+	isEnteringCommand  bool
+	commandInput       cmdinput.Model
 }
 
 type editorMode string
@@ -33,6 +36,7 @@ func newEditor() *editor {
 		normalModeCommands: []command{
 			cmdQuit{},
 		},
+		commandInput: cmdinput.New(),
 	}
 	for i := 0; i < initialInputs; i++ {
 		m.buffers[i] = newBuffer()
@@ -48,12 +52,13 @@ func (m editor) Init() tea.Cmd {
 func (m editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
-	updateBuffers := true
+	var updateBuffers bool
+	var updateInput bool
 
 	switch m.mode {
 	case modeNormal:
 		var cmd tea.Cmd
-		updateBuffers, m, cmd = m.updateNormalMode(msg)
+		updateBuffers, updateInput, m, cmd = m.updateNormalMode(msg)
 		cmds = append(cmds, cmd)
 
 	case modeInsert:
@@ -69,6 +74,13 @@ func (m editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	m.sizeBuffers()
+
+	if updateInput {
+		newModel, cmd := m.commandInput.Update(msg)
+		slog.Info("updating command input", "model", slog.Any("msg", msg))
+		m.commandInput = newModel
+		cmds = append(cmds, cmd)
+	}
 
 	if updateBuffers {
 		for i := range m.buffers {
@@ -88,46 +100,74 @@ func (m *editor) sizeBuffers() {
 	}
 }
 
-func (m editor) updateNormalMode(msg tea.Msg) (bool, editor, tea.Cmd) {
+func (m editor) updateNormalMode(msg tea.Msg) (bool, bool, editor, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	updateInputs := true
+	updateCommandInput := false
 
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
-		for _, cmd := range m.normalModeCommands {
-			if msg.String() == cmd.Short() {
-				c, err := cmd.Exec(context.Background())
-				if err != nil {
-					fmt.Print(err)
+
+		if m.isEnteringCommand {
+			switch msg.String() {
+			case "esc":
+				m.buffers[0].Focus()
+				m.commandInput.Blur()
+				m.isEnteringCommand = false
+				m.commandInput.Reset()
+				updateCommandInput = false
+			case "enter":
+				currValue := m.commandInput.Value()
+				if currValue == "" {
+					updateCommandInput = false
+					break
 				}
 
-				return false, m, c
+				// TODO: add proper command parsing
+				for _, cmd := range m.normalModeCommands {
+					if currValue == cmd.Short() || currValue == cmd.FullName() {
+						c, err := cmd.Exec(context.Background())
+						if err != nil {
+							fmt.Print(err)
+						}
+
+						return false, true, m, c
+					}
+				}
+			default:
+				updateCommandInput = true
+			}
+		} else {
+			switch msg.String() {
+			case "k":
+				m.buffers[0].CursorUp()
+				updateInputs = false
+			case "h":
+				m.buffers[0].CharacterLeft()
+				updateInputs = false
+			case "l":
+				m.buffers[0].CharacterRight()
+				updateInputs = false
+			case "j":
+				m.buffers[0].CursorDown()
+				updateInputs = false
+			case ":":
+				m.buffers[0].Blur()
+				m.commandInput.SetValue("")
+				cmds = append(cmds, m.commandInput.Focus())
+				m.isEnteringCommand = true
+			case "i":
+				m.mode = modeInsert
+				updateInputs = false
+			default:
+				updateInputs = false
 			}
 		}
 
-		switch msg.String() {
-		case "k":
-			m.buffers[0].CursorUp()
-			updateInputs = false
-		case "h":
-			m.buffers[0].CharacterLeft()
-			updateInputs = false
-		case "l":
-			m.buffers[0].CharacterRight()
-			updateInputs = false
-		case "j":
-			m.buffers[0].CursorDown()
-			updateInputs = false
-		case "i":
-			m.mode = modeInsert
-			updateInputs = false
-		default:
-			updateInputs = false
-		}
 	}
 
-	return updateInputs, m, tea.Batch(cmds...)
+	return updateInputs, updateCommandInput, m, tea.Batch(cmds...)
 }
 
 func (m editor) updateInsertMode(msg tea.Msg) (bool, editor, tea.Cmd) {
@@ -152,5 +192,5 @@ func (m editor) View() string {
 		views = append(views, m.buffers[i].View())
 	}
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, views...) + "\n\n" + string(m.mode)
+	return lipgloss.JoinVertical(lipgloss.Top, lipgloss.JoinHorizontal(lipgloss.Top, views...), m.commandInput.View()) + "\n" + string(m.mode)
 }

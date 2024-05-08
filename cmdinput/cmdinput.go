@@ -1,4 +1,4 @@
-package textarea
+package cmdinput
 
 import (
 	"crypto/sha256"
@@ -109,10 +109,6 @@ type Model struct {
 	// hasn't entered anything yet.
 	Placeholder string
 
-	// ShowLineNumbers, if enabled, causes line numbers to be printed
-	// after the prompt.
-	ShowLineNumbers bool
-
 	// EndOfBufferCharacter is displayed at the end of the input.
 	EndOfBufferCharacter rune
 
@@ -174,8 +170,8 @@ type Model struct {
 	// vertically such that we can maintain the same navigating position.
 	lastCharOffset int
 
-	// lineNumberFormat is the format string used to display line numbers.
-	lineNumberFormat string
+	// linePrefixFormat is the format string displayed before the input.
+	linePrefixFormat string
 
 	// viewport is the vertically-scrollable viewport of the multi-line text
 	// input.
@@ -194,23 +190,22 @@ func New() Model {
 	focusedStyle, blurredStyle := DefaultStyles()
 
 	m := Model{
-		CharLimit:            defaultCharLimit,
-		MaxHeight:            defaultMaxHeight,
+		CharLimit:            0,
+		MaxHeight:            1,
 		MaxWidth:             defaultMaxWidth,
 		Prompt:               lipgloss.ThickBorder().Left + " ",
 		style:                &blurredStyle,
 		FocusedStyle:         focusedStyle,
 		BlurredStyle:         blurredStyle,
 		cache:                memoization.NewMemoCache[line, [][]rune](defaultMaxHeight),
-		EndOfBufferCharacter: '~',
-		ShowLineNumbers:      true,
+		EndOfBufferCharacter: ' ',
 		Cursor:               cur,
 
 		value:            make([][]rune, minHeight, defaultMaxHeight),
 		focus:            false,
 		col:              0,
 		row:              0,
-		lineNumberFormat: "%3v ",
+		linePrefixFormat: ": ",
 
 		viewport: &vp,
 	}
@@ -252,6 +247,10 @@ func DefaultStyles() (Style, Style) {
 func (m *Model) SetValue(s string) {
 	m.Reset()
 	m.InsertString(s)
+}
+
+func (m *Model) CursorCol() int {
+	return m.col
 }
 
 // InsertString inserts a string at the cursor position.
@@ -352,10 +351,6 @@ func (m *Model) insertRunesFromUserInput(runes []rune) {
 	m.value[m.row] = append(m.value[m.row], tail...)
 
 	m.SetCursor(m.col)
-}
-
-func (m *Model) SetLineNumberFormat(f string) {
-	m.lineNumberFormat = f
 }
 
 // Value returns the value of the text input.
@@ -831,12 +826,6 @@ func (m *Model) SetWidth(w int) {
 	// Add prompt width to reserved inner width.
 	reservedInner := m.promptWidth
 
-	// Add line number width to reserved inner width.
-	if m.ShowLineNumbers {
-		const lnWidth = 4 // Up to 3 digits for line number plus 1 margin.
-		reservedInner += lnWidth
-	}
-
 	// Input width must be at least one more than the reserved inner and outer
 	// width. This gives us a minimum input width of 1.
 	minWidth := reservedInner + reservedOuter + 1
@@ -910,7 +899,26 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case pasteErrMsg:
 		m.Err = msg
 	case tea.KeyMsg:
-		m.insertRunesFromUserInput(msg.Runes)
+		switch {
+		case msg.Type == tea.KeyBackspace:
+			m.col = clamp(m.col, 0, len(m.value[m.row]))
+			if m.col <= 0 {
+				m.mergeLineAbove(m.row)
+				break
+			}
+			if len(m.value[m.row]) > 0 {
+				m.value[m.row] = append(m.value[m.row][:max(0, m.col-1)], m.value[m.row][m.col:]...)
+				if m.col > 0 {
+					m.SetCursor(m.col - 1)
+				}
+			}
+		case msg.Type == tea.KeyLeft:
+			m.characterLeft(false /* insideLine */)
+		case msg.Type == tea.KeyRight:
+			m.characterRight()
+		default:
+			m.insertRunesFromUserInput(msg.Runes)
+		}
 	}
 
 	vp, cmd := m.viewport.Update(msg)
@@ -959,21 +967,7 @@ func (m Model) View() string {
 			s.WriteString(style.Render(prompt))
 			displayLine++
 
-			if m.ShowLineNumbers {
-				if wl == 0 {
-					if m.row == l {
-						s.WriteString(style.Render(m.style.CursorLineNumber.Render(fmt.Sprintf(m.lineNumberFormat, l+1))))
-					} else {
-						s.WriteString(style.Render(m.style.LineNumber.Render(fmt.Sprintf(m.lineNumberFormat, l+1))))
-					}
-				} else {
-					if m.row == l {
-						s.WriteString(style.Render(m.style.CursorLineNumber.Render(fmt.Sprintf(m.lineNumberFormat, " "))))
-					} else {
-						s.WriteString(style.Render(m.style.LineNumber.Render(fmt.Sprintf(m.lineNumberFormat, " "))))
-					}
-				}
-			}
+			s.WriteString(m.linePrefixFormat)
 
 			strwidth := uniseg.StringWidth(string(wrappedLine))
 			padding := m.width - strwidth
@@ -1048,10 +1042,6 @@ func (m Model) placeholderView() string {
 	prompt = m.style.Prompt.Render(prompt)
 	s.WriteString(m.style.CursorLine.Render(prompt))
 
-	if m.ShowLineNumbers {
-		s.WriteString(m.style.CursorLine.Render(m.style.CursorLineNumber.Render((fmt.Sprintf(m.lineNumberFormat, 1)))))
-	}
-
 	m.Cursor.TextStyle = m.style.Placeholder
 	m.Cursor.SetChar(string(p[0]))
 	s.WriteString(m.style.CursorLine.Render(m.Cursor.View()))
@@ -1066,10 +1056,6 @@ func (m Model) placeholderView() string {
 		prompt = m.style.Prompt.Render(prompt)
 		s.WriteString(prompt)
 
-		if m.ShowLineNumbers {
-			eob := m.style.EndOfBuffer.Render(string(m.EndOfBufferCharacter))
-			s.WriteString(eob)
-		}
 	}
 
 	m.viewport.SetContent(s.String())
