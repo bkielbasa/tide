@@ -1,6 +1,6 @@
 module github.com/bkielbasa/tide
 
-go 1.22.1
+go 1.22
 
 require (
 	github.com/atotto/clipboard v0.1.4

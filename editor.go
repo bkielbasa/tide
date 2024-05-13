@@ -2,11 +2,11 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"github.com/bkielbasa/tide/cmdinput"
 	"github.com/bkielbasa/tide/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"log/slog"
 	"strings"
 )
 
@@ -17,9 +17,9 @@ type editor struct {
 	focus   int
 	mode    editorMode
 
-	normalModeCommands []command
-	isEnteringCommand  bool
-	commandInput       cmdinput.Model
+	commands          []command
+	isEnteringCommand bool
+	commandInput      cmdinput.Model
 }
 
 type editorMode string
@@ -33,11 +33,14 @@ func newEditor() *editor {
 	m := editor{
 		buffers: make([]buffer, initialInputs),
 		mode:    modeNormal,
-		normalModeCommands: []command{
+		commands: []command{
 			cmdQuit{},
 		},
 		commandInput: cmdinput.New(),
 	}
+
+	m.commands = append(m.commands, cmdOpenFiles{&m})
+
 	for i := 0; i < initialInputs; i++ {
 		m.buffers[i] = newBuffer()
 	}
@@ -49,20 +52,23 @@ func (m editor) Init() tea.Cmd {
 	return textarea.Blink
 }
 
+func (m *editor) OpenBuffer(fileName string) error {
+	return m.buffers[0].Open(fileName)
+}
+
 func (m editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
+	var cmd tea.Cmd
 
 	var updateBuffers bool
 	var updateInput bool
 
 	switch m.mode {
 	case modeNormal:
-		var cmd tea.Cmd
 		updateBuffers, updateInput, m, cmd = m.updateNormalMode(msg)
 		cmds = append(cmds, cmd)
 
 	case modeInsert:
-		var cmd tea.Cmd
 		updateBuffers, m, cmd = m.updateInsertMode(msg)
 		cmds = append(cmds, cmd)
 	}
@@ -71,6 +77,12 @@ func (m editor) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.height = msg.Height
 		m.width = msg.Width
+	}
+
+	if cmd != nil && cmd() == commandCloseCommandInput() {
+		m.isEnteringCommand = false
+		m.buffers[0].Focus()
+		m.commandInput.Blur()
 	}
 
 	m.sizeBuffers()
@@ -126,16 +138,18 @@ func (m editor) updateNormalMode(msg tea.Msg) (bool, bool, editor, tea.Cmd) {
 				val := strings.Split(currValue, " ")
 
 				// TODO: add proper command parsing
-				for _, cmd := range m.normalModeCommands {
+				for _, cmd := range m.commands {
 					if val[0] == cmd.Short() || val[0] == cmd.FullName() {
 						c, err := cmd.Exec(context.Background(), val[1:]...)
 						if err != nil {
-							fmt.Print(err)
+							slog.Debug(err.Error())
 						}
 
 						return false, true, m, c
 					}
 				}
+
+				return false, true, m, commandCloseCommandInput
 			default:
 				updateCommandInput = true
 			}
@@ -193,5 +207,12 @@ func (m editor) View() string {
 		views = append(views, m.buffers[i].View())
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Top, lipgloss.JoinHorizontal(lipgloss.Top, views...), m.commandInput.View()) + "\n" + string(m.mode)
+	return lipgloss.JoinVertical(lipgloss.Top, lipgloss.JoinHorizontal(lipgloss.Top, views...), m.commandInputView()) + "\n" + string(m.mode)
+}
+
+func (m editor) commandInputView() string {
+	if !m.isEnteringCommand {
+		return ""
+	}
+	return m.commandInput.View()
 }

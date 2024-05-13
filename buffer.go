@@ -12,6 +12,12 @@ import (
 	"github.com/smacker/go-tree-sitter/golang"
 )
 
+func commandCloseCommandInput() tea.Msg {
+	return commandCloseCommandMsg{}
+}
+
+type commandCloseCommandMsg struct{}
+
 type buffer struct {
 	name string
 	text textarea.Model
@@ -32,8 +38,6 @@ func newBuffer() buffer {
 		name:   "UNNAMED",
 		parser: sitter.NewParser(),
 	}
-
-	b.Open("main.go")
 
 	return b
 }
